@@ -1,0 +1,15 @@
+# Path budget: <=512 bytes; see artifacts/PATH-BUDGET.md.
+# The required production export remains included.
+!dist/
+!dist/**
+**/node_modules/
+**/.cache/
+**/.npm/
+**/.npm-cache/
+**/.pnpm-store/
+**/.yarn/cache/
+**/.vite/
+**/coverage/
+**/*.tsbuildinfo
+.playwright-mcp/
+test/scratch/
