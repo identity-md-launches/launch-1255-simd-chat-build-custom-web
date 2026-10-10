@@ -22,8 +22,8 @@ export default function Settings({
     <div className="settings-page">
       <div className="page-heading">
         <div>
-          <h1>Make yourself at home.</h1>
-          <p>A few small adjustments for the way you follow the market.</p>
+          <h1>Customize your workspace</h1>
+          <p>Set your market, refresh interval, and sentiment threshold.</p>
         </div>
         <span className="badge neutral">
           <Icon name="shield" size={14} /> Saved on this device

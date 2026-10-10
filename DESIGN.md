@@ -2,7 +2,7 @@
 
 ## Overview
 
-Pulse is a personal intraday crypto research workspace. The interface uses a light, quiet canvas, white data surfaces, a forest-green primary action, and restrained financial status colors. The dashboard leads with the selected market and **Analyze market**, followed by four metrics, a chart and signal summary, technical indicators, and the underlying conversation sample. There is no marketing hero between the user and the tool.
+Pulse is a personal intraday crypto research workspace. The interface uses a light, quiet canvas, white data surfaces, a forest-green primary action, and restrained financial status colors. The dashboard leads with the selected market and **Analyze market**, followed by four metrics, a chart and decision card, technical indicators, and the underlying conversation sample. There is no marketing hero between the user and the tool.
 
 The source of truth is `src/styles.css`, with structure in `src/App.tsx` and `src/components/`. Desktop navigation occupies a fixed leading sidebar; small screens get an in-flow navigation row. The product is English-only and deliberately implements one light theme.
 
@@ -36,7 +36,7 @@ Rendered contrast measurements are recorded in `artifacts/browser-results.json`:
 ## Typography
 
 - Family: **Manrope**, then Arial, then generic sans-serif. The local Latin variable WOFF2 is `public/fonts/manrope-latin.woff2`, loaded with `font-display: swap` and a preload. Its license is `public/fonts/OFL.txt`. No font service is contacted at runtime.
-- Declared weight range: 400–800. Body uses 500; controls and metadata primarily 600/650; headings and numbers 700/750; the wordmark 800. Browser verification confirmed the local face loaded. No italic text is required.
+- Declared weight range: 400–800. Three rendered weights: 500 for body text, 600 for labels and metadata, and 750 for headings, primary controls, numbers, and the wordmark. Explicit strong/bold styles also use 750 to avoid an extra browser-default weight. Browser verification confirmed the local face loaded. No italic text is required.
 - Five-size scale: `--text-xs` **12px**, `--text-sm` **14px**, `--text-base` **16px**, `--text-lg` **20px**, `--text-xl` **28px**. The same roles apply across pages. The dense research dashboard uses 12px metadata and 14px headline copy; guide text enlarges to 16px on mobile.
 - H1: 28px/1.25, weight 750, −1px tracking. Card H2: 16px/1.4, weight 750. Guide/settings section H2: 20px. Large signal values are paragraphs/strong text, not oversized subordinate headings.
 - Default line-height is 1.5. Explanatory copy uses 1.6–1.9. Long prose is capped around 72–75ch. Headings balance wrapping; short explanatory paragraphs use pretty wrapping.
@@ -59,9 +59,11 @@ The spacing vocabulary is 4, 8, 12, 16, 20, 24, 32, 40, and 48px (`--space-*` de
 
 Reflow was tested at 320, 390, 570, 760, 800, 1060, 1280, and 1440 CSS pixels without document-level horizontal overflow. The 390×844 first-screen capture shows the brand, product, market selector, and primary action. Data tables use their own bounded scrolling area. Native browser 200% zoom and physical devices were not manually tested.
 
+The guide starts with “How to use Pulse” and its Open dashboard action, then the existing 24px gap and numbered steps. Settings starts with “Customize your workspace”. Confidence and position disclosures span both columns of the intermediate-width decision card and return to normal stacked flow on mobile. Price ranges wrap without truncation.
+
 ## Elevation & Depth
 
-Surfaces are almost flat: a 1px structural border and a very subtle `0 2px 3px #102b1c02` shadow. The primary button has a small shadow; selected metric controls have a subtle shadow and a dark underline. The insight panel uses a pale gradient from `#f6f9f2` through `#fcfdfb` to white. Chart area fill fades from 17% opacity to transparent. There are no modals, blurred backdrops, or animated page entrances.
+Panels and primary buttons are flat bordered surfaces with no outer shadow; selected metric controls have a subtle shadow and a dark underline. The insight panel uses a pale gradient from `#f6f9f2` through `#fcfdfb` to white. Chart area fill fades from 17% opacity to transparent. There are no modals, blurred backdrops, or animated page entrances.
 
 The fixed desktop sidebar uses z-index 20; the keyboard skip link uses 1000. Below 760px, navigation returns to normal document flow so it cannot cover content.
 
@@ -77,8 +79,8 @@ The fixed desktop sidebar uses z-index 20; the keyboard skip link uses 1000. Bel
 | Buttons — `.button`, `.primary`, `.secondary`, `.text-button` | One filled primary action in the visible workflow. Hover, focus, pressed, and disabled/loading states. Busy analysis has text plus a spinner; repeated submissions are disabled                               |
 | Market control — `Dashboard.tsx`, `.market-select-wrap`       | Native labeled select for BTC/ETH/SOL/LINK; switching cancels the prior request and clears mismatched live data                                                                                               |
 | Metric card — `.metric-card`                                  | Label, large numeric value, explanatory metadata, and optional redundant status/sparkline. Missing data is an em dash, never a fabricated value                                                               |
-| Chart / Sparkline — `Chart.tsx`                               | Price or headline-observation metric, three time windows, pointer inspection, optional keyboard range inspector, textual SVG summary, expandable table of the latest 20 observations; actionable empty state  |
-| Signal summary — `Dashboard.tsx`, `.insight-panel`            | Transparent three-factor alignment. Expandable ATR scenario. Missing or stale conversation data withholds the intraday summary; all demo figures remain labeled                                               |
+| Chart / Sparkline — `Chart.tsx`                               | Price or headline-observation metric; three time filters. X positions and evenly timed ticks span first-to-last timestamps; pointer selects the nearest time, keyboard inspector traverses observations. Duplicate times share an x position (one-minute centered domain). Short spans show seconds, with three ticks on narrow charts. SVG summary, latest-20 table, and actionable empty state  |
+| Decision card — `Dashboard.tsx`, `decision.ts`, `.insight-panel` | Buy/Sell/Hold/Take Profit or explicit unavailable state, rationale, three-factor evidence, and confidence disclosure. Native Position context disclosure contains a labeled select and entry input; 44px minimum controls and 16px field text. Expandable long/short ATR levels only for an entry setup. Demo remains labeled                                               |
 | Conversation — `Dashboard.tsx`                                | Native filter buttons with `aria-pressed`; 4-row preview and full-feed expansion; external HN links; recoverable empty state                                                                                  |
 | TextAnalyzer — `Dashboard.tsx`                                | Local, ephemeral text form. Visible label/hint, inline error linked with `aria-describedby`, error focus, escaped text rendering, polite result announcement; no network submission                           |
 | Settings — `Settings.tsx`                                     | Native selects, checkboxes, and checkbox-based switch. Changes apply on Save settings. Restore defaults changes the draft first. Persistence failures apply settings for the session and state the limitation |
@@ -92,7 +94,7 @@ High-frequency interactions are immediate. The only continuous motion is the in-
 - Reuse `.panel`, `.panel-heading`, `.page-heading`, and the semantic tokens. A new page should retain the shell, one H1, and the current hash-routing pattern.
 - Keep the main action near the heading, visible before dashboard detail on mobile. Keep secondary actions outlined or text-based.
 - Keep actual-source status, sample size, and timestamps close to consequential metrics. Never blend demo numbers into a live result.
-- Keep numerical calculations in `analysis.ts` and provider parsing in `data.ts`. Present unavailable values plainly rather than inventing confidence or interpolated observations.
+- Keep indicator calculations in `analysis.ts`, decision rules in `decision.ts`, and provider parsing in `data.ts`. Present unavailable values plainly. Define confidence as rule support, never a calibrated probability; never invent missing observations.
 - Preserve native controls, readable chart labels, visible keyboard focus, and responsive input sizes. Add text/icon cues when adding a new status.
 - Do not add an account flow, wallet, private credentials, dark theme, or decorative motion without a product requirement.
 

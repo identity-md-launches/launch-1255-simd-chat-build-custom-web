@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeText,
   formatMoney,
@@ -9,6 +9,8 @@ import {
   toCsv,
 } from "../analysis";
 import { ASSETS } from "../types";
+import { marketDecision } from "../decision";
+import type { Decision, Position } from "../decision";
 import type { DataSet, Settings, Story, Symbol, Tone } from "../types";
 import Chart, { Sparkline } from "./Chart";
 import Icon from "./Icon";
@@ -27,7 +29,7 @@ function SentimentBadge({
     </span>
   );
 }
-function download(data: DataSet, threshold: number) {
+function download(data: DataSet, threshold: number, decision: Decision, position: Position) {
   const stats = sentiment(data.stories, threshold);
   const tech = indicators(data.market?.candles ?? []);
   const rows: (string | number)[][] = [
@@ -49,6 +51,19 @@ function download(data: DataSet, threshold: number) {
         : "Hacker News via Algolia; last 7 days",
     ],
     ["Sentiment score", stats.score ?? "Unavailable"],
+    ["Decision action", decision.action ?? "Unavailable"],
+    ["Decision rationale", decision.rationale],
+    ["Confidence (rule support, not probability)", decision.confidence],
+    ["Confidence basis", decision.confidenceReason],
+    ["Decision headlines (last 24h)", decision.sampleCount],
+    ["Position context", position.side],
+    ["Position average entry USD", position.side === "none" ? "Not supplied" : position.entry ?? "Invalid"],
+    ["Setup direction", decision.levels?.direction ?? "No new entry"],
+    ["Entry low USD", decision.levels?.entryLow ?? "Unavailable"],
+    ["Entry high USD", decision.levels?.entryHigh ?? "Unavailable"],
+    ["Stop USD", decision.levels?.stop ?? "Unavailable"],
+    ["Target USD", decision.levels?.target ?? "Unavailable"],
+    ["Levels note", decision.levelsReason || "Entry = price ±0.25 ATR; stop 1.5 ATR and target 3 ATR from midpoint; fees/slippage excluded"],
     ["Price USD", data.market?.price ?? "Unavailable"],
     ["UTC-day change %", data.market?.change ?? "Unavailable"],
     ["24h volume USD", data.market?.volume ?? "Unavailable"],
@@ -234,6 +249,21 @@ export default function Dashboard({
   const [showAll, setShowAll] = useState(false);
   const [feedMode, setFeedMode] = useState<"feed" | "text">("feed");
   const [levels, setLevels] = useState(false);
+  const [positionDraft, setPositionDraft] = useState({ mode: data.mode, side: "none" as Position["side"], entry: "" });
+  useEffect(() => {
+    setPositionDraft({ mode: data.mode, side: "none", entry: "" });
+  }, [data.mode]);
+  const positionSide = positionDraft.mode === data.mode ? positionDraft.side : "none";
+  const entryText = positionDraft.mode === data.mode ? positionDraft.entry : "";
+  const position: Position = {
+    side: positionSide,
+    entry: entryText.trim() ? Number(entryText) : null,
+  };
+  const invalidEntry = positionSide !== "none" && (position.entry === null || !Number.isFinite(position.entry) || position.entry <= 0);
+  const decision = marketDecision(data, settings.threshold, position);
+  const longSignals = decision.factors.filter((factor) => factor.direction === "long").length;
+  const shortSignals = decision.factors.filter((factor) => factor.direction === "short").length;
+  const alignedSignals = Math.max(longSignals, shortSignals);
   const stats = useMemo(
     () => sentiment(data.stories, settings.threshold),
     [data.stories, settings.threshold],
@@ -262,24 +292,8 @@ export default function Dashboard({
       ? 0
       : Math.floor((Date.now() - newestStoryTime) / 3600000);
   const staleSocial = data.mode === "live" && headlineAgeHours >= 24;
-  const bullishFactors = [
-    !staleSocial && stats.score !== null && stats.score >= settings.threshold,
-    data.market && tech.vwap !== null && data.market.price > tech.vwap,
-    tech.rsi !== null && tech.rsi >= 50 && tech.rsi < 70,
-  ].filter(Boolean).length;
-  const complete = !!data.market && stats.score !== null && !staleSocial;
-  const bias =
-    staleSocial && data.market
-      ? "Wait for fresh context"
-      : !complete
-        ? "Wait for more data"
-        : bullishFactors >= 2
-          ? "Bullish lean"
-          : bullishFactors === 0
-            ? "Cautious outlook"
-            : "Mixed signals";
-  const toneClass =
-    bullishFactors >= 2 && complete ? "positive" : "neutral-text";
+  const toneClass = decision.action === "Buy" ? "positive"
+    : decision.action === "Sell" ? "negative" : "neutral-text";
   const staleMinutes = data.market
     ? Math.floor((Date.now() - (data.market.candles.at(-1)?.time ?? 0)) / 60000)
     : 0;
@@ -304,7 +318,7 @@ export default function Dashboard({
           <button
             className="button secondary export-button"
             onClick={() => {
-              download(data, settings.threshold);
+              download(data, settings.threshold, decision, position);
               announce("Analysis exported as a CSV file.");
             }}
           >
@@ -531,105 +545,68 @@ export default function Dashboard({
             </span>
           </div>
           <div className="insight-label">
-            {data.mode === "demo"
-              ? "Illustrative signal summary"
-              : "Rule-based signal summary"}
+            {data.mode === "demo" ? "Demo recommendation · local rules" : "Recommended action · local rules"}
           </div>
           <div className={`insight-bias ${toneClass}`}>
             <span className="bias-icon">
-              <Icon
-                name={bullishFactors >= 2 ? "trend" : "activity"}
-                size={26}
-              />
+              <Icon name={decision.action === "Buy" ? "trend" : "activity"} size={26} />
             </span>
-            <p className="bias-value">{bias}</p>
+            <p className="bias-value">{decision.action ?? "Decision unavailable"}</p>
           </div>
-          <p className="insight-copy">
-            {staleSocial
-              ? "The conversation sample is more than a day old. Use the price indicators for current context, or analyze your own fresh headlines below."
-              : !complete
-                ? "A useful perspective needs both market prices and a conversation sample. Retry the analysis or use demo mode."
-                : bullishFactors >= 2
-                  ? "Positive signals are building. Keep an eye on momentum and wait for your own confirmation."
-                  : "The signals are not aligned. Watch how price develops before drawing a conclusion."}
-          </p>
+          <p className="insight-copy">{decision.rationale}</p>
           <div className="alignment">
-            <span>Positive signal alignment</span>
-            <strong>
-              {bullishFactors}
-              <span> / 3</span>
-            </strong>
+            <span>{longSignals === shortSignals ? "Directional alignment" : longSignals > shortSignals ? "Bullish alignment" : "Bearish alignment"}</span>
+            <strong>{decision.action === null ? "—" : alignedSignals}<span> / 3</span></strong>
           </div>
           <div className="alignment-bars" aria-hidden="true">
             {[0, 1, 2].map((i) => (
-              <span key={i} className={i < bullishFactors ? "filled" : ""} />
+              <span key={i} className={decision.action !== null && i < alignedSignals ? "filled" : ""} />
             ))}
           </div>
           <ul className="factor-list">
-            <li>
-              <span
-                className={`factor-icon ${!staleSocial && stats.score !== null && stats.score >= settings.threshold ? "yes" : ""}`}
-              >
-                <Icon
-                  name={
-                    !staleSocial &&
-                    stats.score !== null &&
-                    stats.score >= settings.threshold
-                      ? "check"
-                      : "info"
-                  }
-                  size={13}
-                />
-              </span>
-              {staleSocial
-                ? "Conversation sample is over 24 hours old"
-                : stats.score === null
-                  ? "Conversation sample unavailable"
-                  : `${tone(stats.score, settings.threshold)} conversation tone`}
-            </li>
-            <li>
-              <span
-                className={`factor-icon ${data.market && tech.vwap !== null && data.market.price > tech.vwap ? "yes" : ""}`}
-              >
-                <Icon
-                  name={
-                    data.market &&
-                    tech.vwap !== null &&
-                    data.market.price > tech.vwap
-                      ? "check"
-                      : "info"
-                  }
-                  size={13}
-                />
-              </span>
-              {!data.market || tech.vwap === null
-                ? "Session VWAP unavailable"
-                : `Price ${data.market.price > tech.vwap ? "above" : "below"} session VWAP`}
-            </li>
-            <li>
-              <span
-                className={`factor-icon ${tech.rsi !== null && tech.rsi >= 50 && tech.rsi < 70 ? "yes" : ""}`}
-              >
-                <Icon
-                  name={
-                    tech.rsi !== null && tech.rsi >= 50 && tech.rsi < 70
-                      ? "check"
-                      : "info"
-                  }
-                  size={13}
-                />
-              </span>
-              {tech.rsi === null
-                ? "RSI unavailable"
-                : tech.rsi >= 70
-                  ? "RSI is overbought"
-                  : tech.rsi < 30
-                    ? "RSI is oversold"
-                    : tech.rsi >= 50
-                      ? "RSI supports positive momentum"
-                      : "RSI momentum is below 50"}
-            </li>
+            {decision.factors.map((factor) => (
+              <li key={factor.label}>
+                <span className="factor-icon" aria-hidden="true">
+                  {factor.direction === "long" ? "↗" : factor.direction === "short" ? "↘" : "−"}
+                </span>
+                {factor.label}
+              </li>
+            ))}
           </ul>
+          <details className="decision-confidence">
+            <summary>Confidence: {decision.confidence} <span>· rule support</span></summary>
+            <p>{decision.confidenceReason}</p>
+            <p>
+              This is an uncalibrated rule assessment, not a probability of profit.
+              Hold is Low. For an action, fewer than 5 fresh headlines or under 50%
+              with matched words is Low; 50–79% is Moderate; at least 80% is High.
+              High also requires at least 5 headlines and the action’s conditions.
+            </p>
+          </details>
+          <details className="position-context">
+            <summary>Position context · {positionSide === "none" ? "no position" : positionSide}</summary>
+            <label htmlFor="position-side">Position</label>
+            <select id="position-side" value={positionSide}
+              onChange={(event) => setPositionDraft({ mode: data.mode, side: event.target.value as Position["side"], entry: "" })}>
+              <option value="none">No position</option>
+              <option value="long">Long position</option>
+              <option value="short">Short position</option>
+            </select>
+            {positionSide !== "none" && <>
+              <label htmlFor="position-entry">Average entry (USD)</label>
+              <input id="position-entry" type="number" min="0.00000001" step="any" inputMode="decimal"
+                value={entryText} aria-invalid={invalidEntry} aria-describedby="position-hint"
+                onChange={(event) => setPositionDraft({ mode: data.mode, side: positionSide, entry: event.target.value })} />
+            </>}
+            <p id="position-hint">{invalidEntry ? "Enter a positive average entry price. " : ""}
+              Optional, local and unsaved. Take Profit requires a profitable position
+              before costs and RSI ≥70 for a long or ≤30 for a short.
+              Context clears when you change market, data mode, or page.
+            </p>
+          </details>
+          <div className="sr-only" role="status">
+            {decision.action ?? "Decision unavailable"}. Confidence: {decision.confidence}.
+          </div>
           <button
             className="button secondary levels-button"
             onClick={() => setLevels(!levels)}
@@ -640,42 +617,26 @@ export default function Dashboard({
           </button>
           {levels && (
             <div className="price-levels">
-              {data.market && tech.atr !== null ? (
+              {decision.levels ? (
                 <>
-                  <p>Illustrative long scenario</p>
+                  <p>{decision.levels.direction === "long" ? "Long" : "Short"} entry setup · USD</p>
                   <dl>
-                    <div>
-                      <dt>Reference price</dt>
-                      <dd>{formatMoney(data.market.price)}</dd>
-                    </div>
-                    <div>
-                      <dt>Stop · −1.5 ATR</dt>
-                      <dd>{formatMoney(data.market.price - tech.atr * 1.5)}</dd>
-                    </div>
-                    <div>
-                      <dt>Target · +3 ATR</dt>
-                      <dd>{formatMoney(data.market.price + tech.atr * 3)}</dd>
-                    </div>
-                    <div>
-                      <dt>Reward / risk</dt>
-                      <dd>2:1 before costs</dd>
-                    </div>
+                    <div><dt>Entry range · ±0.25 ATR</dt><dd>{formatMoney(decision.levels.entryLow)} – {formatMoney(decision.levels.entryHigh)}</dd></div>
+                    <div><dt>Reference midpoint</dt><dd>{formatMoney(decision.levels.midpoint)}</dd></div>
+                    <div><dt>Stop · {decision.levels.direction === "long" ? "−" : "+"}1.5 ATR</dt><dd>{formatMoney(decision.levels.stop)}</dd></div>
+                    <div><dt>Target · {decision.levels.direction === "long" ? "+" : "−"}3 ATR</dt><dd>{formatMoney(decision.levels.target)}</dd></div>
+                    <div><dt>Reward / risk</dt><dd>2:1 at midpoint</dd></div>
                   </dl>
                   <small>
-                    Calculated reference levels, not an order or a trade
-                    recommendation. Fees and slippage are excluded.
+                    Before fees and slippage; the ratio changes with the fill price.
+                    Calculated research levels, not orders. Sell describes a short setup.
                   </small>
                 </>
-              ) : (
-                <p>
-                  Price levels need at least 15 completed candles. Retry the
-                  market analysis.
-                </p>
-              )}
+              ) : <p>{decision.levelsReason}</p>}
             </div>
           )}
           <p className="insight-footnote">
-            A research aid, not a trade recommendation.
+            Research rules, not personalized advice. No trades are executed.
           </p>
         </section>
       </div>

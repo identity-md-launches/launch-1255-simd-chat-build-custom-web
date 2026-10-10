@@ -73,12 +73,12 @@ export default function Chart({
     if (metric === "price")
       return (
         data.market?.candles
-          .filter((c) => c.time >= since)
+          .filter((c) => c.time >= since && c.time <= now)
           .map((c) => ({ time: c.time, value: c.close })) ?? []
       );
     // Each point is one observed headline, in time order. No interpolated observations.
     return data.stories
-      .filter((s) => s.time >= since)
+      .filter((s) => s.time >= since && s.time <= now)
       .sort((a, b) => a.time - b.time)
       .map((s) => ({ time: s.time, value: s.score }));
   }, [data, hours, metric]);
@@ -89,8 +89,22 @@ export default function Chart({
     right = width - 65,
     top = 18,
     bottom = 213;
+  // The window filters observations; the axis spans the first/last observation.
+  // A shared timestamp gets a centered one-minute domain, never index spacing.
+  const firstTime = points[0]?.time ?? 0;
+  const lastTime = points.at(-1)?.time ?? firstTime;
+  const timeStart = firstTime === lastTime ? firstTime - 30000 : firstTime;
+  const timeEnd = firstTime === lastTime ? lastTime + 30000 : lastTime;
+  const timeSpan = timeEnd - timeStart;
   const x = (i: number) =>
-    left + (i / Math.max(1, points.length - 1)) * (right - left);
+    left + ((points[i].time - timeStart) / timeSpan) * (right - left);
+  const tickTime = (time: number) =>
+    timeSpan < 240000
+      ? new Intl.DateTimeFormat("en-US", {
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+          ...(settings.timezone === "UTC" ? { timeZone: "UTC" } : {}),
+        }).format(time)
+      : formatTime(time, settings.timezone);
   const y = (v: number) =>
     bottom - ((v - min) / (max - min || 1)) * (bottom - top);
   const line = points
@@ -176,20 +190,11 @@ export default function Chart({
             aria-label={`${metric === "price" ? "Price" : "Sentiment"} chart for ${data.symbol}, ${period}. From ${displayValue(points[0].value)} to ${displayValue(points.at(-1)!.value)}. Data table below.`}
             onPointerMove={(event) => {
               const bounds = event.currentTarget.getBoundingClientRect();
-              setActive(
-                Math.max(
-                  0,
-                  Math.min(
-                    points.length - 1,
-                    Math.round(
-                      ((((event.clientX - bounds.left) / bounds.width) * width -
-                        left) /
-                        (right - left)) *
-                        (points.length - 1),
-                    ),
-                  ),
-                ),
-              );
+              const fraction = ((((event.clientX - bounds.left) / bounds.width) * width) - left) / (right - left);
+              const time = timeStart + Math.max(0, Math.min(1, fraction)) * timeSpan;
+              // Ties (including duplicate timestamps) select the earlier item.
+              setActive(points.reduce((nearest, point, i) =>
+                Math.abs(point.time - time) < Math.abs(points[nearest].time - time) ? i : nearest, 0));
             }}
             onPointerLeave={() => {
               if (!inspect) setActive(null);
@@ -232,7 +237,7 @@ export default function Chart({
               );
             })}
             <path
-              d={`${line} L${right},${bottom} L${left},${bottom}Z`}
+              d={`${line} L${x(points.length - 1)},${bottom} L${x(0)},${bottom}Z`}
               fill={`url(#fill-${id})`}
             />
             <path
@@ -264,18 +269,15 @@ export default function Chart({
                 />
               </>
             )}
-            {[0, 0.25, 0.5, 0.75, 1].map((fraction, i) => (
+            {(timeSpan < 240000 && width < 450 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1]).map((fraction, i) => (
               <text
                 key={i}
                 x={left + fraction * (right - left)}
                 y="243"
-                textAnchor={i === 0 ? "start" : i === 4 ? "end" : "middle"}
+                textAnchor={fraction === 0 ? "start" : fraction === 1 ? "end" : "middle"}
                 className="chart-label"
               >
-                {formatTime(
-                  points[Math.round(fraction * (points.length - 1))].time,
-                  settings.timezone,
-                )}
+                {tickTime(timeStart + fraction * timeSpan)}
               </text>
             ))}
           </svg>

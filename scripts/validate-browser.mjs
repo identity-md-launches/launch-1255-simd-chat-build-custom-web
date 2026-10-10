@@ -67,10 +67,16 @@ const checks = async (name, fn) => {
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
   acceptDownloads: true,
+  timezoneId: "UTC",
 });
 const page = await context.newPage();
 const errors = [];
 const missingAssets = [];
+const consoleErrors = [];
+const recordConsole = message => {
+  if (message.type() === "error") consoleErrors.push({text:message.text(),url:message.location().url});
+};
+page.on("console", recordConsole);
 page.on("pageerror", (error) => errors.push(String(error)));
 page.on("response", (res) => {
   if (res.url().startsWith(base) && res.status() >= 400)
@@ -90,6 +96,7 @@ const noOverflow = async () => {
 };
 const audits = [];
 const contrastMeasurements = [];
+const revisionMeasurements = [];
 const audit = async (label) => {
   const scan = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
@@ -333,7 +340,7 @@ try {
     },
   );
   await checks(
-    "Sentiment filters, expanded feed and scenario levels",
+    "Sentiment filters, expanded feed and Hold level disclosure",
     async () => {
       await click("Bearish");
       assert.equal(await page.locator(".story-list>li").count(), 4);
@@ -346,7 +353,7 @@ try {
       await click("Explore price levels");
       assert.match(
         await page.locator(".price-levels").textContent(),
-        /2:1 before costs/,
+        /No entry range while signals disagree/,
       );
       await click("Explore price levels");
     },
@@ -418,6 +425,8 @@ try {
       assert.match(text, /"Mode","demo"/);
       assert.match(text, /"Title","Published UTC"/);
       assert.match(text, /"RSI 14"/);
+      assert.match(text, /"Decision action","Hold"/);
+      assert.match(text, /"Confidence \(rule support, not probability\)","Low"/);
     },
   );
   await checks(
@@ -428,12 +437,12 @@ try {
       await page
         .getByRole("heading", {
           level: 1,
-          name: "A little context. A clearer view.",
+          name: "How to use Pulse",
         })
         .waitFor();
       assert.equal(
         await page.getByRole("heading", { level: 1 }).textContent(),
-        "A little context. A clearer view.",
+        "How to use Pulse",
       );
       assert.match(await page.locator("main").textContent(), /Hacker News/);
       assert.match(await page.locator("main").textContent(), /Binance/);
@@ -706,14 +715,14 @@ try {
     async () => {
       mode = "stale";
       await click("Analyze market");
-      await page.getByText("Wait for fresh context", { exact: true }).waitFor();
+      await page.getByText("Decision unavailable", { exact: true }).waitFor();
       assert.match(
         await page.locator(".data-notice").textContent(),
         /Newest headline is 72 hours old/,
       );
       assert.match(
         await page.locator(".factor-list").textContent(),
-        /over 24 hours old/,
+        /No headlines in the last 24 hours/,
       );
     },
   );
@@ -753,7 +762,7 @@ try {
       );
       assert.match(
         await page.locator(".insight-bias").textContent(),
-        /Wait for more data/,
+        /Decision unavailable/,
       );
       await page.setViewportSize({ width: 390, height: 844 });
       assert.ok(
@@ -771,11 +780,226 @@ try {
       );
     },
   );
+  await checks("Revised task headings, three rendered weights and flat bordered surfaces", async () => {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: width === 390 ? 844 : 900});
+      for (const route of ["home", "guide", "settings"]) {
+        await page.goto(base + "#" + route);
+        await page.getByRole("heading", {level: 1}).waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const measured = await page.evaluate(() => {
+          const text = [...document.querySelectorAll("body *")].filter(el =>
+            [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()) && el.checkVisibility());
+          return {
+            heading: document.querySelector("h1").textContent,
+            weights: [...new Set(text.map(el => getComputedStyle(el).fontWeight))].sort(),
+            chrome: [...document.querySelectorAll(".panel,.button.primary")].filter(el => el.checkVisibility()
+              && getComputedStyle(el).boxShadow !== "none" && parseFloat(getComputedStyle(el).borderWidth) > 0).length,
+            stepTop: document.querySelector(".guide-step")?.getBoundingClientRect().top,
+          };
+        });
+        assert.deepEqual(measured.weights, ["500", "600", "750"]);
+        assert.equal(measured.chrome, 0);
+        if (route === "guide") {
+          assert.equal(measured.heading, "How to use Pulse");
+          assert.equal(await page.locator(".guide-intro").count(), 0);
+          if (width === 390) {
+            assert.ok(measured.stepTop < 400);
+            await page.screenshot({path:join(output,"guide-mobile.png")});
+          }
+        }
+        if (route === "settings") assert.equal(measured.heading, "Customize your workspace");
+        revisionMeasurements.push({width, route, ...measured});
+        await noOverflow();
+      }
+    }
+  });
+
+  const decisionPage = await context.newPage();
+  decisionPage.on("console", recordConsole);
+  decisionPage.on("pageerror", error => errors.push(String(error)));
+  decisionPage.on("response", response => {
+    if (response.url().startsWith(base) && response.status() >= 400) missingAssets.push(response.url());
+  });
+  const decisionTime = Date.UTC(2026, 9, 10, 12);
+  await decisionPage.clock.install({time: new Date(decisionTime)});
+  let scenario = "long";
+  let storyMode = "normal";
+  let staleMarket = false;
+  let missingMarket = false;
+  let sparse = false;
+  await decisionPage.route("https://**/*", async route => {
+    const url = route.request().url();
+    const sign = scenario.startsWith("short") ? -1 : 1;
+    const extreme = scenario.endsWith("extreme");
+    const priceAt = i => 1000 + sign * (extreme ? i : i * 0.1 + (i % 2 ? 1 : 0));
+    let body;
+    if (url.includes("/OHLC")) {
+      if (missingMarket) { await route.fulfill({status:503,json:{}}); return; }
+      body = {error: [], result: {XXBTZUSD: Array.from({length:61}, (_,i) => {
+        const price = priceAt(i);
+        return [decisionTime/1000-(60-i)*300-(staleMarket ? 3600 : 0), price, price+2, price-2, price, price, 10, 1];
+      }), last: 1}};
+    } else if (url.includes("/Ticker")) body = {error: [], result: {XXBTZUSD: {
+      c: [String(priceAt(60))], o: "1000", v: ["10","120"], p:["1000","1000"], h:["1100","1100"], l:["900","900"]
+    }}};
+    else if (url.includes("algolia")) {
+      const offsets = storyMode === "irregular" ? [14400, 14340, 60]
+        : storyMode === "duplicates" ? [60,60,60]
+        : storyMode === "empty" ? [] : Array.from({length:sparse ? 2 : 5},(_,i)=>(i+1)*60);
+      body = {hits: offsets.map((seconds,i) => ({objectID:String(i),
+        title: storyMode === "irregular" ? ["Bitcoin rally","Bitcoin crash","Bitcoin recovery"][i]
+          : scenario === "mixed" ? "Bitcoin Thursday" : sign === 1 ? "Bitcoin bullish" : "Bitcoin bearish",
+        created_at_i:decisionTime/1000-seconds-(storyMode === "stale" ? 86400 : 0)}))};
+    } else { await route.fulfill({status:503,json:{}}); return; }
+    await route.fulfill({json: body});
+  });
+  await decisionPage.goto(base);
+  const analyzeDecision = async expected => {
+    await decisionPage.getByRole("button",{name:"Analyze market",exact:true}).click();
+    await decisionPage.getByRole("button",{name:"Analyze market",exact:true}).waitFor();
+    assert.equal(await decisionPage.locator(".bias-value").textContent(), expected);
+  };
+  await checks("Buy/Sell decisions, confidence, mirrored levels, exports and responsive disclosures", async () => {
+    await analyzeDecision("Buy");
+    await decisionPage.getByRole("button",{name:"Pause automatic refresh"}).click();
+    await decisionPage.locator(".decision-confidence summary").click();
+    assert.match(await decisionPage.locator(".decision-confidence").innerText(), /Confidence: High/);
+    assert.match(await decisionPage.locator(".decision-confidence").innerText(), /not a probability/);
+    await decisionPage.getByRole("button",{name:"Explore price levels"}).click();
+    const values = async () => (await decisionPage.locator(".price-levels dd").allTextContents()).slice(0,4);
+    assert.deepEqual(await values(), ["$1,005.00 – $1,007.00", "$1,006.00", "$1,000.00", "$1,018.00"]);
+    for (const width of [320,390,570,760,800,1060,1280,1440]) {
+      await decisionPage.setViewportSize({width,height:900});
+      assert.equal(await decisionPage.evaluate(()=>document.documentElement.scrollWidth <= innerWidth), true);
+      if (width === 390 || width === 1440) {
+        await decisionPage.locator(".insight-panel").screenshot({path:join(output,`decision-buy-${width}.png`)});
+      }
+    }
+    const scan = await new AxeBuilder({page:decisionPage}).withTags(["wcag2a","wcag2aa","wcag21aa","wcag22aa"]).analyze();
+    audits.push({label:"Expanded Buy decision",violations:scan.violations});
+    assert.equal(scan.violations.length,0);
+    scenario = "short";
+    await analyzeDecision("Sell");
+    assert.deepEqual(await values(), ["$993.00 – $995.00", "$994.00", "$1,000.00", "$982.00"]);
+    const ready = decisionPage.waitForEvent("download");
+    await decisionPage.getByRole("button",{name:"Export",exact:true}).click();
+    const csv = await readFile(await (await ready).path(),"utf8");
+    assert.match(csv, /"Decision action","Sell"/);
+    assert.match(csv, /"Entry low USD","993"/);
+    assert.match(csv, /"Stop USD","1000"/);
+    await decisionPage.locator(".insight-panel").screenshot({path:join(output,"decision-sell.png")});
+    sparse = true;
+    await analyzeDecision("Sell");
+    assert.match(await decisionPage.locator(".decision-confidence summary").innerText(), /Low/);
+    sparse = false;
+    scenario = "mixed";
+    await analyzeDecision("Hold");
+    assert.equal(await decisionPage.locator(".price-levels dd").count(),0);
+  });
+  await checks("Take Profit requires valid profitable position context; long/short symmetry and reset", async () => {
+    await decisionPage.locator(".position-context summary").click();
+    for (const side of ["long","short"]) {
+      scenario = `${side}-extreme`;
+      await decisionPage.getByLabel("Position",{exact:true}).selectOption("none");
+      await analyzeDecision("Hold");
+      await decisionPage.getByLabel("Position",{exact:true}).selectOption(side);
+      assert.equal(await decisionPage.locator(".bias-value").textContent(),"Decision unavailable");
+      const entry = decisionPage.getByLabel("Average entry (USD)");
+      await entry.fill("0");
+      assert.equal(await entry.getAttribute("aria-invalid"),"true");
+      await entry.fill("1000");
+      assert.equal(await entry.getAttribute("aria-invalid"),"false");
+      assert.equal(await decisionPage.locator(".bias-value").textContent(),"Take Profit");
+      assert.match(await decisionPage.locator(".insight-copy").innerText(), /profitable before costs/);
+      assert.equal(await decisionPage.locator(".price-levels dd").count(),0);
+      if (side === "long") {
+        await entry.focus();
+        await entry.press("ArrowUp");
+        const scan = await new AxeBuilder({page:decisionPage}).withTags(["wcag2a","wcag2aa","wcag21aa","wcag22aa"]).analyze();
+        audits.push({label:"Take Profit position form",violations:scan.violations});
+        assert.equal(scan.violations.length,0);
+        await decisionPage.locator(".insight-panel").screenshot({path:join(output,"decision-take-profit.png")});
+      }
+      await entry.fill(side === "long" ? "1100" : "900");
+      assert.equal(await decisionPage.locator(".bias-value").textContent(),"Hold");
+    }
+    await decisionPage.getByRole("button",{name:"Use demo",exact:true}).click();
+    assert.equal(await decisionPage.getByLabel("Position",{exact:true}).inputValue(),"none");
+    await analyzeDecision("Hold");
+    assert.equal(await decisionPage.getByLabel("Position",{exact:true}).inputValue(),"none");
+    await decisionPage.getByRole("button",{name:"Use demo",exact:true}).click();
+    await decisionPage.getByLabel("Position",{exact:true}).selectOption("long");
+    await decisionPage.getByLabel("Average entry (USD)").fill("60000");
+    await decisionPage.getByLabel("Your market").selectOption("ETH");
+    await decisionPage.locator(".position-context summary").click();
+    assert.equal(await decisionPage.getByLabel("Position",{exact:true}).inputValue(),"none");
+    await decisionPage.getByLabel("Your market").selectOption("BTC");
+  });
+  await checks("Stale/missing inputs withhold recommendations and paused live decisions expire", async () => {
+    scenario = "long";
+    for (const state of ["stale","empty"]) { storyMode=state; await analyzeDecision("Decision unavailable"); }
+    storyMode = "normal";
+    staleMarket = true;
+    await analyzeDecision("Decision unavailable");
+    assert.match(await decisionPage.locator(".insight-copy").innerText(), /stale/);
+    staleMarket = false;
+    missingMarket = true;
+    await analyzeDecision("Decision unavailable");
+    missingMarket = false;
+    await analyzeDecision("Buy");
+    assert.equal(await decisionPage.getByRole("button",{name:"Resume automatic refresh"}).count(),1);
+    await decisionPage.clock.fastForward(601000);
+    assert.equal(await decisionPage.locator(".bias-value").textContent(),"Decision unavailable");
+    assert.match(await decisionPage.locator(".decision-confidence summary").innerText(), /Unavailable/);
+    await decisionPage.clock.setFixedTime(new Date(decisionTime));
+  });
+  await checks("Sentiment uses timestamp spacing, evenly timed ticks and nearest-time pointer inspection", async () => {
+    storyMode = "irregular";
+    await analyzeDecision("Hold");
+    await decisionPage.getByRole("button",{name:"Sentiment",exact:true}).click();
+    const chart = decisionPage.locator(".main-chart");
+    const path = await chart.locator("path[fill='none']").getAttribute("d");
+    const xs = [...path.matchAll(/[ML]([\d.]+),/g)].map(match => Number(match[1]));
+    assert.equal(xs.length,3);
+    assert.ok(Math.abs((xs[1]-xs[0])/(xs[2]-xs[0])-1/239)<0.0001);
+    const ticks = await chart.locator("text[y='243']").allTextContents();
+    assert.deepEqual(ticks, ["08:00","08:59","09:59","10:59","11:59"]);
+    revisionMeasurements.push({timelinePath:path, ticks, gapRatio:(xs[1]-xs[0])/(xs[2]-xs[0])});
+    await decisionPage.getByRole("button",{name:"Inspect data",exact:true}).click();
+    await chart.scrollIntoViewIfNeeded();
+    const bounds = await chart.boundingBox();
+    const viewWidth = Number((await chart.getAttribute("viewBox")).split(" ")[2]);
+    const pointer = async fraction => {
+      await decisionPage.mouse.move(bounds.x + (xs[0]+fraction*(xs[2]-xs[0]))/viewWidth*bounds.width,bounds.y+bounds.height/2);
+      return decisionPage.getByRole("slider").inputValue();
+    };
+    assert.equal(await pointer(0),"0");
+    assert.equal(await pointer(0.1),"1");
+    assert.equal(await pointer(0.6),"2");
+    await decisionPage.getByRole("slider").focus();
+    await decisionPage.getByRole("slider").press("Home");
+    await decisionPage.getByRole("slider").press("ArrowRight");
+    assert.equal(await decisionPage.getByRole("slider").inputValue(),"1");
+    await decisionPage.locator(".chart-panel").screenshot({path:join(output,"sentiment-time-spacing.png")});
+    storyMode = "duplicates";
+    await analyzeDecision("Buy");
+    const duplicatePath = await chart.locator("path[fill='none']").getAttribute("d");
+    const duplicates = [...duplicatePath.matchAll(/[ML]([\d.]+),/g)].map(match=>Number(match[1]));
+    assert.equal(new Set(duplicates).size,1);
+    assert.doesNotMatch(duplicatePath,/NaN|Infinity/);
+    await decisionPage.setViewportSize({width:390,height:844});
+    assert.equal(await chart.locator("text[y='243']").count(),3);
+    assert.equal(await decisionPage.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
+  });
+  await decisionPage.close();
   await checks(
     "Browser runtime and local resources stay error-free",
     async () => {
       assert.deepEqual(errors, []);
       assert.deepEqual(missingAssets, []);
+      assert.deepEqual(consoleErrors.filter(error => !(error.text.includes("503") &&
+        /^https:\/\/(api\.kraken\.com|hn\.algolia\.com|fapi\.binance\.com)\//.test(error.url))), []);
     },
   );
   await writeFile(
@@ -787,11 +1011,14 @@ try {
         results,
         audits,
         contrastMeasurements,
+        revisionMeasurements,
         errors,
         missingAssets,
+        consoleErrors,
         notes: [
           "Live success/error/empty/refresh tests use intercepted public-API fixtures.",
-          "Real provider availability is checked separately.",
+          "503 console resource messages are expected from explicitly failed API fixtures; all other console errors fail this run.",
+          "These intercepted responses do not certify production provider availability.",
           "Narrow viewports are reflow tests, not native browser zoom.",
         ],
       },

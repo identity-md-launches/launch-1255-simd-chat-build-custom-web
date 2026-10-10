@@ -4,25 +4,11 @@ export default function Guide() {
     <div className="guide-page">
       <div className="page-heading">
         <div>
-          <h1>A little context. A clearer view.</h1>
-          <p>Get comfortable with your personal market workspace.</p>
+          <h1>How to use Pulse</h1>
         </div>
         <a href="#home" className="button primary">
           Open dashboard <Icon name="arrow" size={18} />
         </a>
-      </div>
-      <div className="guide-intro panel">
-        <div className="guide-symbol">
-          <Icon name="activity" size={42} />
-        </div>
-        <div>
-          <h2>Make the signal easier to see.</h2>
-          <p>
-            Pulse brings market prices, conversation sentiment, and technical
-            indicators into one place. Use it to organize your research before
-            making an intraday trading decision.
-          </p>
-        </div>
       </div>
       <div className="guide-steps">
         {[
@@ -39,7 +25,7 @@ export default function Guide() {
           [
             "03",
             "Read signals together",
-            "Compare the sentiment score with price momentum, RSI, and session VWAP. Open price levels to explore a transparent ATR-based scenario. No single indicator tells the whole story.",
+            "Read the action, rationale, and confidence in The market read. Open price levels for an aligned entry, or add optional position context to check the profit-taking rule.",
           ],
         ].map(([n, title, text]) => (
           <section className="panel guide-step" key={n}>
@@ -100,9 +86,11 @@ export default function Guide() {
               <dt>ATR & price levels</dt>
               <dd>
                 ATR is the mean true range of the last 14 completed candles. The
-                illustrative long scenario uses the latest price, a stop 1.5 ATR
-                below it, and a target 3 ATR above it. It excludes fees,
-                slippage, and position sizing.
+                entry range is the latest price ±0.25 ATR. For Buy, the stop is
+                1.5 ATR below that midpoint and the target 3 ATR above it. Sell
+                means a short setup, with the stop above and target below.
+                Reward/risk is 2:1 only at the midpoint, before fees and slippage;
+                it changes with your fill. Hold and Take Profit have no new entry range.
               </dd>
             </div>
           </dl>
@@ -123,10 +111,12 @@ export default function Guide() {
               caution.
             </p>
             <p>
-              If the newest headline is 24 hours old or more, Pulse labels the
-              sample as background context and withholds the intraday summary.
-              Sentiment charts show actual headline observations in the selected
-              period. Empty charts mean there were fewer than two observations;
+              Only headlines from the last 24 hours enter the decision; the
+              sentiment metric can include the full seven-day sample. The action
+              is unavailable if no fresh headlines remain, the price fetch is
+              10 minutes old, the last completed candle is 15 minutes old, or
+              required indicators are missing. Sentiment charts space observations
+              by their publication times within the selected period. Empty charts mean there were fewer than two observations;
               Pulse does not invent missing points.
             </p>
           </section>
@@ -159,6 +149,31 @@ export default function Guide() {
         </div>
       </div>
       <section className="panel prose sources-guide">
+        <h2>How decisions work</h2>
+        <p>
+          With No position selected, Buy requires bullish fresh sentiment, price
+          above session VWAP, and RSI strictly between 50 and 70. Sell requires
+          bearish fresh sentiment, price below VWAP, and RSI strictly between
+          30 and 50. All three must agree; otherwise the action is Hold.
+        </p>
+        <p>
+          For an existing position, enter its side and average entry in Position
+          context. Take Profit requires a profit before costs and RSI at least 70
+          for a long, or at most 30 for a short. Otherwise it says Hold, which is
+          not an assurance that the position is safe. These rules do not model
+          your account, costs, leverage, or exit plan. Position context is unsaved
+          and clears when you change market, data mode, or page.
+        </p>
+        <p>
+          Confidence describes rule support and sample coverage, not a probability
+          of profit. Hold is Low. For Buy, Sell, or Take Profit, confidence is Low
+          below 5 fresh headlines or below 50% keyword coverage; with at least 5
+          headlines it is Moderate at 50–79% coverage and High at 80% or more.
+          Coverage means the share of titles with recognized sentiment words.
+          Even High is uncalibrated and can be wrong.
+        </p>
+      </section>
+      <section className="panel prose sources-guide">
         <h2>Sources & methodology</h2>
         <div className="source-links">
           <a
@@ -189,8 +204,10 @@ export default function Guide() {
         <p>
           Pulse is an independent browser-only adaptation. It replaces the
           reference’s paid X and AI services with public data and local
-          analysis. It does not reproduce its AI decisions, author-diversity
-          analysis, or calibrated confidence claims.
+          analysis. Buy, Sell, Hold, and Take Profit use the rules above, not the
+          reference’s AI model. Author-diversity analysis and calibrated confidence
+          are not reproduced. Funding and open interest remain context indicators;
+          they do not enter these decision rules.
         </p>
         <p className="disclaimer">
           Research support only. Sentiment and technical levels are not

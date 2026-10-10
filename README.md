@@ -8,7 +8,7 @@ A static, single-user crypto research app inspired by [Jev X Sentiment Analysis]
 
 1. Start with the labeled demo workspace, or select **Analyze market** to load public data.
 2. Choose Bitcoin, Ethereum, Solana, or Chainlink. Compare sentiment, price, RSI, volume, VWAP, moving average, funding, and open interest.
-3. Change chart metric/window, inspect an observation, filter headlines, or open the illustrative ATR price levels. Export a CSV to save the current analysis and provenance.
+3. Change chart metric/window, inspect an observation, filter headlines, or review the rule-based action, confidence, and ATR entry range. Optional position context enables Take Profit checks for an existing long or short. Export a CSV to save the current analysis and provenance.
 4. Use **Analyze text** to score up to 1,000 pasted headlines/posts locally, one per line. This is useful when the public conversation sample is sparse or old.
 5. Read **How to use** for methodology. **Settings** saves the default market, watchlist, refresh interval, sample size, time zone, and sentiment threshold in this browser.
 
@@ -64,21 +64,31 @@ Do not upload `node_modules`, package caches, test scratch output, or the develo
 
 Each title starts at 50. Positive/negative keyword weights are summed, with simple negation in the previous three words, then mapped by `round(50 + 50 × tanh(sum / 2))`. The headline scores are equally averaged. Default bullish/bearish thresholds are 60/40. This is transparent deterministic analysis, **not an AI model or calibrated probability**.
 
-Technical calculations are in `src/analysis.ts`: Wilder RSI(14), session VWAP from midnight UTC, SMA(20), and the mean true range of the last 14 completed candles. The illustrative long scenario uses the current price, a stop 1.5 ATR lower, and a target 3 ATR higher. It is a reference calculation, not an executed order or personalized recommendation; fees and slippage are excluded.
+Technical calculations are in `src/analysis.ts`: Wilder RSI(14), session VWAP from midnight UTC, SMA(20), and the mean true range of the last 14 completed candles.
 
-The reference project’s paid X ingestion, TypeSafe model, arbitrary-asset coverage, engagement/author-diversity analysis, squeeze probability, and trade-action confidence are **not reproduced**. This browser-only adaptation uses four supported markets and public/local inputs. It does not pretend the HN sample is X sentiment or a representative cross-section of traders.
+The Market read decision is calculated locally in `src/decision.ts`:
+
+- **Buy**: bullish sentiment from headlines less than 24 hours old, price above session VWAP, and RSI strictly between 50 and 70. **Sell**: bearish fresh sentiment, price below VWAP, and RSI strictly between 30 and 50. Sell describes a short setup. All three entry signals must agree; otherwise **Hold** means wait for an entry.
+- **Take Profit**: supply a long/short position and positive average entry in the optional Position context disclosure. The current price must imply a profit before costs, with RSI ≥70 for a long or ≤30 for a short. Otherwise Hold means no profit-taking trigger, not that the position is safe. Context is local, unsaved, and clears on market, data-mode, or page changes. No account or order execution is connected.
+- **Confidence** is an uncalibrated assessment of rule support and sample coverage, not a probability of profit. Hold is Low. For an action whose conditions are met, fewer than 5 fresh titles or under 50% keyword coverage is Low; with at least 5 titles, 50–79% coverage is Moderate and ≥80% is High. Coverage means the fraction of titles with recognized sentiment words. HN remains a limited sample even at High.
+- **Entry range**: latest price ±0.25 ATR. Long stop/target: midpoint −1.5 ATR / +3 ATR; short stop/target: midpoint +1.5 ATR / −3 ATR. Reward/risk is 2:1 at the midpoint, before costs, and changes with the actual fill. Hold, Take Profit, or unavailable decisions do not invent a new entry range.
+- **Unavailable**: missing prices/headlines/indicators, price fetch ≥10 minutes old, last completed candle ≥15 minutes old, no headlines less than 24 hours old, invalid position entry, or invalid/non-positive price levels. Paused live decisions age out; labeled demo data uses its own snapshot time. All decision fields and supplied position context are included in CSV exports.
+
+The decision's fresh sample can differ from the seven-day sentiment summary. Funding and open interest remain contextual indicators, not inputs to these rules. Fees, slippage, leverage, account risk, and position sizing are not modeled; recommendations are research rules, not personalized advice.
+
+The reference project’s paid X ingestion, TypeSafe model, arbitrary-asset coverage, engagement/author-diversity analysis, squeeze probability, and calibrated AI confidence are **not reproduced**. The decision card is implemented using the documented local rules above. This browser-only adaptation uses four supported markets and public/local inputs. It does not pretend the HN sample is X sentiment or a representative cross-section of traders.
 
 ## Validation
 
-Actual worker checks on **2026-10-10**, Node 24.21.0 / npm 11.19.0:
+Actual worker checks on **2026-10-10**, Node 22.22.2 / npm 10.9.7:
 
 | Check                      | Result                                                                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run typecheck`        | Passed, zero TypeScript errors                                                                                                                        |
-| `npm test`                 | 14 calculation/parsing/storage/CSV tests passed                                                                                                       |
+| `npm test`                 | 22 calculation/parsing/storage/CSV/decision tests passed                                                                                                       |
 | `npm run build`            | Passed; complete relative-URL static export in `dist/`                                                                                                |
-| `npm run validate:browser` | 19 production interaction checks passed; 7 axe scans found zero violations; details in `artifacts/validation.md` and `artifacts/browser-results.json` |
-| Live browser requests      | Kraken OHLC + ticker, Algolia search, Binance funding + open interest returned HTTP 200; no console errors on the repaired integration                |
+| `npm run validate:browser` | 24 production interaction checks passed; 9 axe scans found zero violations; details in `artifacts/validation.md` and `artifacts/browser-results.json` |
+| Provider availability      | This revision validates deterministic intercepted responses; production provider availability is not asserted by those tests. |
 | Better Interface review    | All six domains reviewed; findings fixed and limitations recorded in `artifacts/validation.md`                                                        |
 
 To repeat the browser checks:
@@ -89,14 +99,14 @@ npm run build
 npm run validate:browser
 ```
 
-The script starts its own temporary static server under `/preview/`, tests the actual export, and closes both server and browser. Reports go to `test/scratch/validation/`; `PULSE_REPORT_DIR` can select another output location. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an existing Chromium executable. API success/failure/empty/stale/refresh tests use deterministic intercepted responses; the separate live check establishes only availability at the time it ran.
+The script starts its own temporary static server under `/preview/`, tests the actual export, and closes both server and browser. Reports go to `test/scratch/validation/`; `PULSE_REPORT_DIR` can select another output location. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an existing Chromium executable. API success/failure/empty/stale/refresh/decision tests use deterministic intercepted responses. The browser context uses UTC for repeatable time-axis assertions; local-time formatting remains available in Settings. These tests do not certify current provider availability.
 
-To avoid creating dependencies in this repository during the assignment, the worker installed from this package/lockfile in `/tmp/pulse-build`, copied the exact source/configuration there, ran the scripts, and copied the clean export back. Dependencies and npm caches remained outside the submission. Formatting tooling created a local `node_modules/.cache/prettier` directory; it is excluded without editing its contents. The delivered scripts work with a normal `npm ci` installation.
+For this revision, the worker installed from this package/lockfile in `/tmp/pulse-revision`, copied the exact source/configuration there, ran the scripts, and copied the clean export back. Chromium and npm caches also stayed under `/tmp`. The assigned browser tool failed to initialize against a read-only cache path; the bounded Playwright script supplied the rendered checks instead. The delivered scripts work with a normal `npm ci` installation. Reproduction evidence and a response to every finding are in `artifacts/reproduction.json` and `.imd-responses.json`.
 
 ## Limitations
 
 - Public services can fail, rate-limit, change CORS policy, or block a region. Requests time out after 12 seconds. Sources fail independently; failed fields become unavailable, with retry and demo recovery. No proxy is required or bundled.
-- HN is technology-focused and often sparse. In the live Bitcoin check it returned four headlines, with the newest several days old. The app now displays headline age and withholds the intraday summary when the newest title is at least 24 hours old. Fresh pasted text can be scored separately. Sarcasm, complex context, bots, and authorship quality are not modeled.
+- HN is technology-focused and often sparse. The app displays headline age and withholds the decision when no headlines less than 24 hours old remain. Fresh pasted text can be scored separately. Sarcasm, complex context, bots, and authorship quality are not modeled.
 - Spot and perpetual data come from different exchanges and quote markets. Funding period lengths may vary. The source drawer identifies providers and timestamps; data is not a whole-market aggregate.
 - There is no service worker: a previously loaded page supports demo/local analysis without APIs, but a cold offline visit still needs the static files to be served locally or available in browser cache.
 - Tested in desktop Chromium with mobile emulation. No physical-device, Safari/Firefox, manual screen-reader, or native browser-zoom certification is claimed. Automated scans are not a guarantee of accessibility compliance.
@@ -108,9 +118,10 @@ To avoid creating dependencies in this repository during the assignment, the wor
 - `src/components/`: dashboard, charts, guide, settings, and SVG icons.
 - `src/data.ts`: public API parsing, demo data, validated settings loading.
 - `src/analysis.ts`: sentiment, indicators, formatting, CSV escaping.
+- `src/decision.ts`: documented action rules, confidence, freshness gates, and long/short price levels.
 - `src/styles.css`: implemented visual system and responsive rules.
 - `scripts/validate-browser.mjs`: production interaction and accessibility validation.
-- `scripts/generate-social-card.mjs`: optional regeneration of the PNG from `artifacts/social-card.svg`; requires installed Playwright Chromium.
+- `scripts/generate-social-card.mjs`: optional rasterization helper; requires a separately supplied `artifacts/social-card.svg` and installed Playwright Chromium. The complete runtime PNG is already in `public/` and `dist/`.
 - `DESIGN.md`: final tokens, typography, layouts, components, and behavior.
 - `artifacts/`: review evidence, screenshots, results, and attribution.
 
